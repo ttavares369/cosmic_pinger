@@ -3,7 +3,7 @@
 Aplicativo em Rust criado para o Pop!_OS Cosmic 24.04 LTS. Ele monitora múltiplos sites/hosts via `ping`, consolida os resultados e mostra um indicador colorido na bandeja do sistema (KSNI). Quando todos os destinos respondem, o ícone fica verde; em caso de falha o ícone fica vermelho, e durante a inicialização ele aparece amarelo.
 
 ## Funcionalidades
-- Monitoramento cíclico com atualizações a cada 5 s.
+- Monitoramento cíclico com atualizações a cada 3 minutos.
 - Configuração gráfica (`--config`) para adicionar/remover URLs sem editar arquivos manualmente.
 - Persistência automática da lista em `~/.config/com/tiago/cosmic_pinger/sites.json`.
 - Menu da bandeja com status individuais, última atualização e atalho para encerrar.

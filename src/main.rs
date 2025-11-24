@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+const MONITOR_INTERVAL_SECS: u64 = 180;
+
 // --- CONFIGURAÇÃO ---
 #[derive(Serialize, Deserialize, Clone)]
 struct AppConfig {
@@ -112,13 +114,13 @@ fn run_tray() {
         {
             let mut s = monitor_state.lock().unwrap();
             s.results = temp_results;
-            s.last_update = Local::now().format("%H:%M:%S").to_string();
+            s.last_update = Local::now().format("%d/%m/%Y %H:%M:%S").to_string();
             s.all_up = all_ok;
             s.first_run = false;
         }
 
         handle.update(|_| {});
-        thread::sleep(Duration::from_secs(5));
+        thread::sleep(Duration::from_secs(MONITOR_INTERVAL_SECS));
     }
 }
 
