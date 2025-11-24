@@ -2,6 +2,7 @@ use iced::widget::{button, column, container, row, scrollable, text, text_input}
 use iced::{Application, Command, Element, Length, Settings, Theme};
 use ksni::{Tray, MenuItem, ToolTip};
 use ksni::menu::StandardItem;
+use notify_rust::{Notification, Urgency};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -111,8 +112,20 @@ fn run_tray() {
             }
         }
 
+        let mut notifications = Vec::new();
+
         {
             let mut s = monitor_state.lock().unwrap();
+
+            if !s.first_run {
+                for (host, is_up, _) in &temp_results {
+                    let previous = s.results.iter().find(|(prev_host, _, _)| prev_host == host).map(|(_, prev_up, _)| *prev_up);
+                    if previous.map(|p| p != *is_up).unwrap_or(true) {
+                        notifications.push((host.clone(), *is_up));
+                    }
+                }
+            }
+
             s.results = temp_results;
             s.last_update = Local::now().format("%d/%m/%Y %H:%M:%S").to_string();
             s.all_up = all_ok;
@@ -120,6 +133,9 @@ fn run_tray() {
         }
 
         handle.update(|_| {});
+        for (host, is_up) in notifications {
+            send_status_notification(&host, is_up);
+        }
         thread::sleep(Duration::from_secs(MONITOR_INTERVAL_SECS));
     }
 }
@@ -131,13 +147,42 @@ fn do_ping(host: &str) -> (bool, String) {
             if out.status.success() {
                 let stdout = String::from_utf8_lossy(&out.stdout);
                 if let Some(pos) = stdout.find("time=") {
-                    let end = stdout[pos..].find(" ms").unwrap_or(0);
-                    (true, format!("{} ms", &stdout[pos+5..pos+end]))
+                    let slice = &stdout[pos + 5..];
+                    if let Some((latency, _)) = slice.split_once(" ms") {
+                        (true, format!("{} ms", latency.trim()))
+                    } else {
+                        (true, "OK".to_string())
+                    }
                 } else { (true, "OK".to_string()) }
             } else { (false, "OFFLINE".to_string()) }
         },
         Err(_) => (false, "Erro".to_string()),
     }
+}
+
+fn send_status_notification(host: &str, is_up: bool) {
+    let (summary, body, icon, urgency) = if is_up {
+        (
+            "Cosmic Pinger",
+            format!("{} voltou a responder.", host),
+            "dialog-information",
+            Urgency::Normal,
+        )
+    } else {
+        (
+            "Cosmic Pinger",
+            format!("{} ficou OFFLINE.", host),
+            "dialog-warning",
+            Urgency::Critical,
+        )
+    };
+
+    let _ = Notification::new()
+        .summary(summary)
+        .body(&body)
+        .icon(icon)
+        .urgency(urgency)
+        .show();
 }
 
 struct PingerTray { state: Arc<Mutex<PingerState>> }
