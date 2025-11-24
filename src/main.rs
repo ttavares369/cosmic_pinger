@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use std::process::{self, Command as SysCommand};
-use chrono::Local;
+use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -73,7 +73,8 @@ fn main() {
 // --- TRAY (BANDEJA) ---
 struct PingerState {
     results: Vec<(String, bool, String)>,
-    last_update: String,
+    last_update: Option<DateTime<Local>>,
+    update_counter: u64,
     all_up: bool,
     first_run: bool,
 }
@@ -83,7 +84,8 @@ fn run_tray() {
     
     let state = Arc::new(Mutex::new(PingerState {
         results: vec![],
-        last_update: "Aguardando...".to_string(),
+        last_update: None,
+        update_counter: 0,
         all_up: true,
         first_run: true,
     }));
@@ -127,7 +129,8 @@ fn run_tray() {
             }
 
             s.results = temp_results;
-            s.last_update = Local::now().format("%d/%m/%Y %H:%M:%S").to_string();
+            s.update_counter += 1;
+            s.last_update = Some(Local::now());
             s.all_up = all_ok;
             s.first_run = false;
         }
@@ -232,8 +235,24 @@ impl Tray for PingerTray {
         let s = self.state.lock().unwrap();
         let mut items = Vec::new();
 
+        let update_label = if let Some(dt) = s.last_update.as_ref() {
+            let formatted = dt.format("%d/%m/%Y %H:%M:%S").to_string();
+            let secs = Local::now()
+                .signed_duration_since(*dt)
+                .num_seconds()
+                .max(0);
+            let relative = if secs >= 60 {
+                format!(" (~{} min atrás)", secs / 60)
+            } else {
+                format!(" (~{} s atrás)", secs)
+            };
+            format!("Update #{}: {}{}", s.update_counter, formatted, relative)
+        } else {
+            "Update: Aguardando...".to_string()
+        };
+
         items.push(MenuItem::Standard(StandardItem {
-            label: format!("Update: {}", s.last_update),
+            label: update_label,
             enabled: false,
             ..Default::default()
         }));
