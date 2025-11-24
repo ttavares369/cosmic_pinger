@@ -1,5 +1,6 @@
 use iced::widget::{button, column, container, row, scrollable, text, text_input};
 use iced::{Application, Command, Element, Length, Settings, Theme};
+use iced::window;
 use ksni::{Tray, MenuItem, ToolTip};
 use ksni::menu::StandardItem;
 use notify_rust::{Notification, Urgency};
@@ -54,6 +55,15 @@ fn save_config(cfg: &AppConfig) {
     // A CORREÇÃO ESTÁ AQUI: Usamos &path para "emprestar" o valor, não mover.
     fs::write(&path, json).unwrap();
     println!("Configuração salva em: {:?}", path);
+}
+
+fn normalize_target(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 // --- MAIN ---
@@ -126,13 +136,11 @@ fn run_tray() {
              temp_results.push(("Nenhum site configurado".to_string(), true, "-".to_string()));
         } else {
             for target in targets {
-                let cleaned = target.trim().to_string();
-                if cleaned.is_empty() {
-                    continue;
+                if let Some(cleaned) = normalize_target(&target) {
+                    let (success, msg) = check_target(&cleaned, client_ref);
+                    if !success { all_ok = false; }
+                    temp_results.push((cleaned, success, msg));
                 }
-                let (success, msg) = check_target(&cleaned, client_ref);
-                if !success { all_ok = false; }
-                temp_results.push((cleaned, success, msg));
             }
             if temp_results.is_empty() {
                 temp_results.push(("Nenhum site válido".to_string(), true, "-".to_string()));
@@ -407,15 +415,21 @@ impl Application for ConfigWindow {
             Message::InputChanged(val) => self.input_value = val,
             Message::AddSite => {
                 println!("Tentando adicionar site: '{}'", self.input_value);
-                if !self.input_value.trim().is_empty() {
-                    self.config.targets.push(self.input_value.trim().to_string());
+                if let Some(cleaned) = normalize_target(&self.input_value) {
+                    self.config.targets.push(cleaned);
                     self.input_value.clear();
+                    save_config(&self.config);
                 }
             },
-            Message::RemoveSite(idx) => { self.config.targets.remove(idx); },
+            Message::RemoveSite(idx) => {
+                if idx < self.config.targets.len() {
+                    self.config.targets.remove(idx);
+                    save_config(&self.config);
+                }
+            },
             Message::SaveAndClose => {
                 save_config(&self.config);
-                std::process::exit(0);
+                return window::close(window::Id::MAIN);
             }
         }
         Command::none()
