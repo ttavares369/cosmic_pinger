@@ -13,6 +13,8 @@ use std::fs;
 use std::path::PathBuf;
 
 const MONITOR_INTERVAL_SECS: u64 = 180;
+const PING_ATTEMPTS: u8 = 3;
+const PING_RETRY_DELAY_MS: u64 = 500;
 
 // --- CONFIGURAÇÃO ---
 #[derive(Serialize, Deserialize, Clone)]
@@ -144,23 +146,39 @@ fn run_tray() {
 }
 
 fn do_ping(host: &str) -> (bool, String) {
-    let output = SysCommand::new("ping").arg("-c").arg("1").arg("-W").arg("1").arg(host).output();
-    match output {
-        Ok(out) => {
-            if out.status.success() {
-                let stdout = String::from_utf8_lossy(&out.stdout);
-                if let Some(pos) = stdout.find("time=") {
-                    let slice = &stdout[pos + 5..];
-                    if let Some((latency, _)) = slice.split_once(" ms") {
-                        (true, format!("{} ms", latency.trim()))
-                    } else {
-                        (true, "OK".to_string())
+    let mut last_message = "OFFLINE".to_string();
+
+    for attempt in 0..PING_ATTEMPTS {
+        let output = SysCommand::new("ping")
+            .arg("-c").arg("1")
+            .arg("-W").arg("1")
+            .arg(host)
+            .output();
+
+        match output {
+            Ok(out) => {
+                if out.status.success() {
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    if let Some(pos) = stdout.find("time=") {
+                        let slice = &stdout[pos + 5..];
+                        if let Some((latency, _)) = slice.split_once(" ms") {
+                            return (true, format!("{} ms", latency.trim()));
+                        }
                     }
-                } else { (true, "OK".to_string()) }
-            } else { (false, "OFFLINE".to_string()) }
-        },
-        Err(_) => (false, "Erro".to_string()),
+                    return (true, "OK".to_string());
+                } else {
+                    last_message = "OFFLINE".to_string();
+                }
+            }
+            Err(_) => last_message = "Erro".to_string(),
+        }
+
+        if attempt + 1 < PING_ATTEMPTS {
+            thread::sleep(Duration::from_millis(PING_RETRY_DELAY_MS));
+        }
     }
+
+    (false, last_message)
 }
 
 fn send_status_notification(host: &str, is_up: bool) {
@@ -236,17 +254,11 @@ impl Tray for PingerTray {
         let mut items = Vec::new();
 
         let update_label = if let Some(dt) = s.last_update.as_ref() {
-            let formatted = dt.format("%d/%m/%Y %H:%M:%S").to_string();
-            let secs = Local::now()
-                .signed_duration_since(*dt)
-                .num_seconds()
-                .max(0);
-            let relative = if secs >= 60 {
-                format!(" (~{} min atrás)", secs / 60)
-            } else {
-                format!(" (~{} s atrás)", secs)
-            };
-            format!("Update #{}: {}{}", s.update_counter, formatted, relative)
+            format!(
+                "Update #{}: {}",
+                s.update_counter,
+                dt.format("%d/%m/%Y %H:%M:%S")
+            )
         } else {
             "Update: Aguardando...".to_string()
         };
