@@ -8,6 +8,7 @@ Aplicativo em Rust criado para o Pop!_OS Cosmic 24.04 LTS. Ele monitora múltipl
 - Persistência automática da lista em `~/.config/com/tiago/cosmic_pinger/sites.json`.
 - Menu da bandeja com status individuais, última atualização e atalho para encerrar.
 - Compatível com Pop!_OS Cosmic/Wayland mantendo footprint leve (binário único).
+- Suporte a URLs HTTP/HTTPS (adicione `http://` ou `https://` no endereço para validar via requisição web).
 
 <img width="782" height="546" alt="image" src="https://github.com/user-attachments/assets/d17bf70f-db6d-4ef4-933f-9a8dd5db59b2" />
 

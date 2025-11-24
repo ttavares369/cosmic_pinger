@@ -3,9 +3,10 @@ use iced::{Application, Command, Element, Length, Settings, Theme};
 use ksni::{Tray, MenuItem, ToolTip};
 use ksni::menu::StandardItem;
 use notify_rust::{Notification, Urgency};
+use reqwest::{blocking::Client, StatusCode};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::process::{self, Command as SysCommand};
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,7 @@ use std::path::PathBuf;
 const MONITOR_INTERVAL_SECS: u64 = 180;
 const PING_ATTEMPTS: u8 = 3;
 const PING_RETRY_DELAY_MS: u64 = 500;
+const HTTP_TIMEOUT_SECS: u64 = 5;
 
 // --- CONFIGURAÇÃO ---
 #[derive(Serialize, Deserialize, Clone)]
@@ -76,6 +78,7 @@ fn main() {
 struct PingerState {
     results: Vec<(String, bool, String)>,
     last_update: Option<DateTime<Local>>,
+    last_update_text: String,
     update_counter: u64,
     all_up: bool,
     first_run: bool,
@@ -87,6 +90,7 @@ fn run_tray() {
     let state = Arc::new(Mutex::new(PingerState {
         results: vec![],
         last_update: None,
+        last_update_text: "Aguardando...".to_string(),
         update_counter: 0,
         all_up: true,
         first_run: true,
@@ -98,10 +102,22 @@ fn run_tray() {
     service.spawn();
 
     let monitor_state = state.clone();
+    let http_client = Client::builder()
+        .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
+        .user_agent("CosmicPinger/0.2.0")
+        .build()
+        .map_err(|err| {
+            eprintln!("Falha ao criar cliente HTTP: {}", err);
+            err
+        })
+        .ok();
+    let monitor_interval = Duration::from_secs(MONITOR_INTERVAL_SECS);
     
     loop {
+        let cycle_start = Instant::now();
         let config = load_config();
         let targets = config.targets;
+        let client_ref = http_client.as_ref();
         
         let mut temp_results = Vec::new();
         let mut all_ok = true;
@@ -110,9 +126,16 @@ fn run_tray() {
              temp_results.push(("Nenhum site configurado".to_string(), true, "-".to_string()));
         } else {
             for target in targets {
-                let (success, msg) = do_ping(&target);
+                let cleaned = target.trim().to_string();
+                if cleaned.is_empty() {
+                    continue;
+                }
+                let (success, msg) = check_target(&cleaned, client_ref);
                 if !success { all_ok = false; }
-                temp_results.push((target, success, msg));
+                temp_results.push((cleaned, success, msg));
+            }
+            if temp_results.is_empty() {
+                temp_results.push(("Nenhum site válido".to_string(), true, "-".to_string()));
             }
         }
 
@@ -132,7 +155,9 @@ fn run_tray() {
 
             s.results = temp_results;
             s.update_counter += 1;
-            s.last_update = Some(Local::now());
+            let now = Local::now();
+            s.last_update = Some(now);
+            s.last_update_text = now.format("%d/%m/%Y %H:%M:%S").to_string();
             s.all_up = all_ok;
             s.first_run = false;
         }
@@ -141,7 +166,12 @@ fn run_tray() {
         for (host, is_up) in notifications {
             send_status_notification(&host, is_up);
         }
-        thread::sleep(Duration::from_secs(MONITOR_INTERVAL_SECS));
+
+        let elapsed = cycle_start.elapsed();
+        let sleep_for = monitor_interval.saturating_sub(elapsed);
+        if !sleep_for.is_zero() {
+            thread::sleep(sleep_for);
+        }
     }
 }
 
@@ -179,6 +209,57 @@ fn do_ping(host: &str) -> (bool, String) {
     }
 
     (false, last_message)
+}
+
+fn check_target(target: &str, http_client: Option<&Client>) -> (bool, String) {
+    if target.starts_with("http://") || target.starts_with("https://") {
+        if let Some(client) = http_client {
+            return do_http_check(client, target);
+        } else {
+            return (false, "HTTP indisponível".to_string());
+        }
+    }
+
+    do_ping(target)
+}
+
+fn do_http_check(client: &Client, url: &str) -> (bool, String) {
+    match client.head(url).send() {
+        Ok(resp) => {
+            let status = resp.status();
+            if status == StatusCode::METHOD_NOT_ALLOWED {
+                return fetch_via_get(client, url);
+            }
+            return summarize_http_status(status);
+        }
+        Err(err) => {
+            if err.is_timeout() {
+                return (false, "HTTP timeout".to_string());
+            }
+            eprintln!("HEAD falhou para {}: {}", url, err);
+            return fetch_via_get(client, url);
+        }
+    }
+}
+
+fn fetch_via_get(client: &Client, url: &str) -> (bool, String) {
+    match client.get(url).send() {
+        Ok(resp) => summarize_http_status(resp.status()),
+        Err(err) => {
+            if err.is_timeout() {
+                (false, "HTTP timeout".to_string())
+            } else {
+                eprintln!("GET falhou para {}: {}", url, err);
+                (false, "HTTP erro".to_string())
+            }
+        }
+    }
+}
+
+fn summarize_http_status(status: StatusCode) -> (bool, String) {
+    let label = format!("HTTP {}", status.as_u16());
+    let ok = status.is_success() || status.is_redirection();
+    (ok, label)
 }
 
 fn send_status_notification(host: &str, is_up: bool) {
@@ -253,15 +334,7 @@ impl Tray for PingerTray {
         let s = self.state.lock().unwrap();
         let mut items = Vec::new();
 
-        let update_label = if let Some(dt) = s.last_update.as_ref() {
-            format!(
-                "Update #{}: {}",
-                s.update_counter,
-                dt.format("%d/%m/%Y %H:%M:%S")
-            )
-        } else {
-            "Update: Aguardando...".to_string()
-        };
+        let update_label = format!("Update #{}: {}", s.update_counter, s.last_update_text);
 
         items.push(MenuItem::Standard(StandardItem {
             label: update_label,
