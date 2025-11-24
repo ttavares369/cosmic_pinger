@@ -35,6 +35,16 @@ As entradas são salvas em `~/.config/com/tiago/cosmic_pinger/sites.json`. Você
 ```
 O serviço sobe em modo bandeja; acompanhe os logs no terminal se quiser ver o output do ciclo de monitoramento.
 
+## Atualização via script
+Para atualizar o aplicativo e reiniciar o applet automaticamente:
+1. Garanta que o repositório está clonado e entre na pasta `cosmic_pinger`.
+2. Execute o script de atualização:
+	```bash
+	./update.sh
+	```
+3. O script fará `git pull`, recompilará com `cargo build --release`, copiará o binário para `~/bin/`, reiniciará o processo atual e iniciará o novo binário.
+4. Verifique o ícone na bandeja para confirmar que o applet voltou a operar.
+
 ## Auto-start no COSMIC
 1. Crie a pasta de binários do usuário (se não existir)
 	```bash
