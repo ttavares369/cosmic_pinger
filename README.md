@@ -5,10 +5,11 @@ Aplicativo em Rust criado para o Pop!_OS Cosmic 24.04 LTS. Ele monitora múltipl
 ## Funcionalidades
 - Monitoramento cíclico com atualizações a cada 3 minutos.
 - Configuração gráfica (`--config`) para adicionar/remover URLs sem editar arquivos manualmente.
-- Persistência automática da lista em `~/.config/com/tiago/cosmic_pinger/sites.json`.
+- Persistência automática da lista em `~/.config/com/cosmicpinger/cosmic_pinger/sites.json`.
 - Menu da bandeja com status individuais, última atualização e atalho para encerrar.
 - Compatível com Pop!_OS Cosmic/Wayland mantendo footprint leve (binário único).
 - Suporte a URLs HTTP/HTTPS (adicione `http://` ou `https://` no endereço para validar via requisição web).
+- Histerese contra falsos positivos: o status só fica vermelho após duas checagens consecutivas com falha, evitando piscadas no tray.
 
 <img width="782" height="546" alt="image" src="https://github.com/user-attachments/assets/d17bf70f-db6d-4ef4-933f-9a8dd5db59b2" />
 
@@ -28,7 +29,7 @@ Execute o modo gráfico para gerenciar os destinos monitorados:
 ```bash
 ./target/release/cosmic_pinger --config
 ```
-As entradas são salvas em `~/.config/com/tiago/cosmic_pinger/sites.json`. Você também pode editar esse arquivo manualmente se preferir.
+As entradas são salvas em `~/.config/com/cosmicpinger/cosmic_pinger/sites.json`. Você também pode editar esse arquivo manualmente se preferir.
 
 ## Execução
 ```bash

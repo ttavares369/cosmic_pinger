@@ -5,6 +5,7 @@ use ksni::{Tray, MenuItem, ToolTip};
 use ksni::menu::StandardItem;
 use notify_rust::{Notification, Urgency};
 use reqwest::{blocking::Client, StatusCode};
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -18,6 +19,7 @@ const MONITOR_INTERVAL_SECS: u64 = 180;
 const PING_ATTEMPTS: u8 = 3;
 const PING_RETRY_DELAY_MS: u64 = 500;
 const HTTP_TIMEOUT_SECS: u64 = 5;
+const FAIL_STREAK_THRESHOLD: u8 = 2;
 
 // --- CONFIGURAÇÃO ---
 #[derive(Serialize, Deserialize, Clone)]
@@ -34,7 +36,7 @@ impl AppConfig {
 }
 
 fn get_config_path() -> PathBuf {
-    let dirs = directories::ProjectDirs::from("com", "tiago", "cosmic_pinger").unwrap();
+    let dirs = directories::ProjectDirs::from("com", "cosmicpinger", "cosmic_pinger").unwrap();
     let path = dirs.config_dir();
     fs::create_dir_all(path).unwrap();
     path.join("sites.json")
@@ -92,6 +94,7 @@ struct PingerState {
     update_counter: u64,
     all_up: bool,
     first_run: bool,
+    fail_streaks: HashMap<String, u8>,
 }
 
 fn run_tray() {
@@ -104,6 +107,7 @@ fn run_tray() {
         update_counter: 0,
         all_up: true,
         first_run: true,
+        fail_streaks: HashMap::new(),
     }));
 
     let service_state = state.clone();
@@ -129,44 +133,78 @@ fn run_tray() {
         let targets = config.targets;
         let client_ref = http_client.as_ref();
         
-        let mut temp_results = Vec::new();
-        let mut all_ok = true;
+        let mut raw_results = Vec::new();
 
         if targets.is_empty() {
-             temp_results.push(("Nenhum site configurado".to_string(), true, "-".to_string()));
+             raw_results.push(("Nenhum site configurado".to_string(), true, "-".to_string()));
         } else {
             for target in targets {
                 if let Some(cleaned) = normalize_target(&target) {
                     let (success, msg) = check_target(&cleaned, client_ref);
-                    if !success { all_ok = false; }
-                    temp_results.push((cleaned, success, msg));
+                    raw_results.push((cleaned, success, msg));
                 }
             }
-            if temp_results.is_empty() {
-                temp_results.push(("Nenhum site válido".to_string(), true, "-".to_string()));
+            if raw_results.is_empty() {
+                raw_results.push(("Nenhum site válido".to_string(), true, "-".to_string()));
             }
         }
 
         let mut notifications = Vec::new();
+        let mut derived_all_up = true;
 
         {
             let mut s = monitor_state.lock().unwrap();
+            let mut fail_map = s.fail_streaks.clone();
+            let previous_results = s.results.clone();
+            let mut final_results = Vec::with_capacity(raw_results.len());
 
-            if !s.first_run {
-                for (host, is_up, _) in &temp_results {
-                    let previous = s.results.iter().find(|(prev_host, _, _)| prev_host == host).map(|(_, prev_up, _)| *prev_up);
-                    if previous.map(|p| p != *is_up).unwrap_or(true) {
-                        notifications.push((host.clone(), *is_up));
+            for (host, success, msg) in raw_results {
+                let entry = fail_map.entry(host.clone()).or_insert(0);
+                let (effective_success, display_msg) = if success {
+                    *entry = 0;
+                    (true, msg)
+                } else {
+                    *entry = entry.saturating_add(1);
+                    if *entry >= FAIL_STREAK_THRESHOLD {
+                        (false, msg)
+                    } else {
+                        let label = format!(
+                            "{} (falha {}/{})",
+                            msg,
+                            *entry,
+                            FAIL_STREAK_THRESHOLD
+                        );
+                        (true, label)
+                    }
+                };
+
+                if !effective_success {
+                    derived_all_up = false;
+                }
+
+                final_results.push((host.clone(), effective_success, display_msg));
+
+                if !s.first_run {
+                    let previous = previous_results
+                        .iter()
+                        .find(|(prev_host, _, _)| prev_host == &host)
+                        .map(|(_, prev_up, _)| *prev_up);
+                    if previous.map(|p| p != effective_success).unwrap_or(true) {
+                        notifications.push((host.clone(), effective_success));
                     }
                 }
             }
 
-            s.results = temp_results;
+            let valid_hosts: HashSet<String> = final_results.iter().map(|(host, _, _)| host.clone()).collect();
+            fail_map.retain(|host, _| valid_hosts.contains(host));
+
+            s.results = final_results;
+            s.fail_streaks = fail_map;
             s.update_counter += 1;
             let now = Local::now();
             s.last_update = Some(now);
             s.last_update_text = now.format("%d/%m/%Y %H:%M:%S").to_string();
-            s.all_up = all_ok;
+            s.all_up = derived_all_up;
             s.first_run = false;
         }
 
