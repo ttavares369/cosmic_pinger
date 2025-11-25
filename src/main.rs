@@ -450,22 +450,31 @@ impl Application for ConfigWindow {
 
     fn update(&mut self, message: Message) -> Command<Message> {
         match message {
-            Message::InputChanged(val) => self.input_value = val,
+            Message::InputChanged(val) => {
+                self.input_value = val;
+            },
             Message::AddSite => {
-                println!("Tentando adicionar site: '{}'", self.input_value);
-                if let Some(cleaned) = normalize_target(&self.input_value) {
+                let trimmed = self.input_value.trim();
+                println!("==> AddSite acionado. Valor: '{}'", trimmed);
+                if let Some(cleaned) = normalize_target(trimmed) {
+                    println!("==> Adicionando site limpo: '{}'", cleaned);
                     self.config.targets.push(cleaned);
                     self.input_value.clear();
                     save_config(&self.config);
+                    println!("==> Site adicionado com sucesso. Total: {}", self.config.targets.len());
+                } else {
+                    println!("==> Valor vazio ou inválido, não adicionando");
                 }
             },
             Message::RemoveSite(idx) => {
                 if idx < self.config.targets.len() {
-                    self.config.targets.remove(idx);
+                    let removed = self.config.targets.remove(idx);
+                    println!("==> Removido site: {}", removed);
                     save_config(&self.config);
                 }
             },
             Message::SaveAndClose => {
+                println!("==> SaveAndClose acionado");
                 save_config(&self.config);
                 return window::close(window::Id::MAIN);
             }
