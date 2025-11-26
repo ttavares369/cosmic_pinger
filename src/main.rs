@@ -112,7 +112,7 @@ struct PingerState {
 }
 
 fn run_tray() {
-    println!("--- Iniciando Modo Tray (ARGB Final) ---");
+    println!("--- Iniciando Modo Tray (Recriação por Ciclo) ---");
     
     let state = Arc::new(Mutex::new(PingerState {
         results: vec![],
@@ -124,12 +124,6 @@ fn run_tray() {
         fail_streaks: HashMap::new(),
     }));
 
-    let service_state = state.clone();
-    let service = ksni::TrayService::new(PingerTray { state: service_state });
-    let handle = service.handle();
-    service.spawn();
-
-    let monitor_state = state.clone();
     let http_client = Client::builder()
         .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
         .user_agent(format!("CosmicPinger/{}", APP_VERSION))
@@ -140,8 +134,26 @@ fn run_tray() {
         })
         .ok();
     let monitor_interval = Duration::from_secs(MONITOR_INTERVAL_SECS);
+
+    // Variável para armazenar o handle do tray atual
+    let mut current_handle: Option<ksni::Handle<PingerTray>> = None;
+    
+    let monitor_state = state.clone();
     
     loop {
+        // Recria o serviço de tray a cada ciclo para forçar atualização do menu no COSMIC
+        if let Some(ref handle) = current_handle {
+            handle.shutdown();
+            thread::sleep(Duration::from_millis(100)); // Pequena pausa para cleanup
+        }
+        
+        let service_state = state.clone();
+        let service = ksni::TrayService::new(PingerTray { state: service_state });
+        let handle = service.handle();
+        service.spawn();
+        current_handle = Some(handle.clone());
+        println!("[TRAY] Serviço de tray (re)criado");
+        
         let cycle_start = Instant::now();
         let config = load_config();
         let targets = config.targets;
@@ -217,17 +229,23 @@ fn run_tray() {
             s.update_counter += 1;
             let now = Local::now();
             s.last_update = Some(now);
-            s.last_update_text = now.format("%d/%m/%Y %H:%M:%S").to_string();
+            s.last_update_text = now.format("%H:%M:%S").to_string();
             s.all_up = derived_all_up;
             s.first_run = false;
+            
+            println!("[CICLO #{}] Checagem concluída às {}. All up: {}", 
+                s.update_counter, 
+                s.last_update_text,
+                s.all_up
+            );
         }
 
-        handle.update(|_| {});
         for (host, is_up) in notifications {
             send_status_notification(&host, is_up);
         }
 
         let elapsed = cycle_start.elapsed();
+        println!("[CICLO] Tempo de execução: {:?}. Dormindo por {:?}", elapsed, monitor_interval.saturating_sub(elapsed));
         let sleep_for = monitor_interval.saturating_sub(elapsed);
         if !sleep_for.is_zero() {
             thread::sleep(sleep_for);
@@ -359,7 +377,19 @@ impl Tray for PingerTray {
     }
 
     fn title(&self) -> String {
-        APP_NAME.to_string()
+        let s = self.state.lock().unwrap();
+        // Título dinâmico com timestamp para forçar atualização
+        if let Some(last) = s.last_update {
+            let elapsed = Local::now().signed_duration_since(last);
+            let mins = elapsed.num_minutes();
+            if s.all_up {
+                format!("{} ✓ ({}m)", APP_NAME, mins)
+            } else {
+                format!("{} ⚠ ({}m)", APP_NAME, mins)
+            }
+        } else {
+            format!("{} ...", APP_NAME)
+        }
     }
 
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
@@ -410,7 +440,21 @@ impl Tray for PingerTray {
         let s = self.state.lock().unwrap();
         let mut items = Vec::new();
 
-        let update_label = format!("Update #{}: {}", s.update_counter, s.last_update_text);
+        // Calcula tempo relativo dinamicamente quando o menu é aberto
+        let update_label = if let Some(last) = s.last_update {
+            let elapsed = Local::now().signed_duration_since(last);
+            let mins = elapsed.num_minutes();
+            let secs = elapsed.num_seconds() % 60;
+            if mins > 0 {
+                format!("Última checagem: há {} min {} seg", mins, secs)
+            } else {
+                format!("Última checagem: há {} seg", secs)
+            }
+        } else {
+            "Aguardando primeira checagem...".to_string()
+        };
+        
+        println!("[MENU] Abrindo menu. Elapsed calculado agora.");
 
         items.push(MenuItem::Standard(StandardItem {
             label: update_label,
