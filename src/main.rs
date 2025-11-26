@@ -168,7 +168,10 @@ fn run_tray() {
         let mut derived_all_up = true;
 
         {
-            let mut s = monitor_state.lock().unwrap();
+            let mut s = match monitor_state.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
             let mut fail_map = s.fail_streaks.clone();
             let previous_results = s.results.clone();
             let mut final_results = Vec::with_capacity(raw_results.len());
@@ -372,7 +375,10 @@ impl Tray for PingerTray {
     }
 
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
-        let s = self.state.lock().unwrap();
+        let s = match self.state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         
         // Byte 0 = Alpha (255 = Visível)
         // Byte 1 = Red
@@ -399,7 +405,10 @@ impl Tray for PingerTray {
     }
 
     fn tool_tip(&self) -> ToolTip {
-        let s = self.state.lock().unwrap();
+        let s = match self.state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         let status_txt = if s.first_run { 
             "Iniciando...".to_string()
         } else if s.all_up { 
@@ -416,7 +425,10 @@ impl Tray for PingerTray {
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
-        let s = self.state.lock().unwrap();
+        let s = match self.state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(), // Recupera de mutex poisoned
+        };
         let mut items = Vec::new();
 
         // Usa o timestamp armazenado - simples e estável
@@ -442,10 +454,11 @@ impl Tray for PingerTray {
         items.push(MenuItem::Standard(StandardItem {
             label: "⚙️ Configurar Sites".into(),
             activate: Box::new(|_| {
-                let exe = std::env::current_exe().unwrap();
-                std::thread::spawn(move || {
-                    SysCommand::new(exe).arg("--config").spawn().unwrap();
-                });
+                if let Ok(exe) = std::env::current_exe() {
+                    std::thread::spawn(move || {
+                        let _ = SysCommand::new(exe).arg("--config").spawn();
+                    });
+                }
             }),
             ..Default::default()
         }));
