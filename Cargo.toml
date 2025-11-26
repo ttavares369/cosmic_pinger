@@ -1,7 +1,12 @@
 [package]
 name = "cosmic_pinger"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
+description = "System tray app to monitor hosts and websites via ping/HTTP"
+license = "MIT"
+repository = "https://github.com/ttavares369/cosmic_pinger"
+keywords = ["monitoring", "ping", "tray", "cosmic", "pop-os"]
+categories = ["network-programming", "command-line-utilities"]
 
 [dependencies]
 ksni = "0.2"
@@ -13,3 +18,9 @@ chrono = "0.4"
 directories = "5" # Para achar a pasta correta de config no Linux
 notify-rust = "4"
 reqwest = { version = "0.12", features = ["blocking", "json", "rustls-tls"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

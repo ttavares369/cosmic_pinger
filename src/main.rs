@@ -15,11 +15,16 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+const APP_NAME: &str = "Cosmic Pinger";
+
+// Monitoring settings
 const MONITOR_INTERVAL_SECS: u64 = 180;
 const PING_ATTEMPTS: u8 = 3;
 const PING_RETRY_DELAY_MS: u64 = 500;
 const HTTP_TIMEOUT_SECS: u64 = 5;
 const FAIL_STREAK_THRESHOLD: u8 = 2;
+const NOTIFICATION_TIMEOUT_MS: i32 = 5000;
 
 // --- CONFIGURAÇÃO ---
 #[derive(Serialize, Deserialize, Clone)]
@@ -36,9 +41,12 @@ impl AppConfig {
 }
 
 fn get_config_path() -> PathBuf {
-    let dirs = directories::ProjectDirs::from("com", "cosmicpinger", "cosmic_pinger").unwrap();
+    let dirs = directories::ProjectDirs::from("com", "cosmicpinger", "cosmic_pinger")
+        .expect("Não foi possível determinar o diretório de configuração");
     let path = dirs.config_dir();
-    fs::create_dir_all(path).unwrap();
+    if let Err(e) = fs::create_dir_all(path) {
+        eprintln!("Erro ao criar diretório de configuração: {}", e);
+    }
     path.join("sites.json")
 }
 
@@ -53,10 +61,16 @@ fn load_config() -> AppConfig {
 
 fn save_config(cfg: &AppConfig) {
     let path = get_config_path();
-    let json = serde_json::to_string_pretty(cfg).unwrap();
-    // A CORREÇÃO ESTÁ AQUI: Usamos &path para "emprestar" o valor, não mover.
-    fs::write(&path, json).unwrap();
-    println!("Configuração salva em: {:?}", path);
+    match serde_json::to_string_pretty(cfg) {
+        Ok(json) => {
+            if let Err(e) = fs::write(&path, json) {
+                eprintln!("Erro ao salvar configuração: {}", e);
+            } else {
+                println!("Configuração salva em: {:?}", path);
+            }
+        }
+        Err(e) => eprintln!("Erro ao serializar configuração: {}", e),
+    }
 }
 
 fn normalize_target(raw: &str) -> Option<String> {
@@ -118,7 +132,7 @@ fn run_tray() {
     let monitor_state = state.clone();
     let http_client = Client::builder()
         .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
-        .user_agent("CosmicPinger/0.2.0")
+        .user_agent(format!("CosmicPinger/{}", APP_VERSION))
         .build()
         .map_err(|err| {
             eprintln!("Falha ao criar cliente HTTP: {}", err);
@@ -311,31 +325,43 @@ fn summarize_http_status(status: StatusCode) -> (bool, String) {
 fn send_status_notification(host: &str, is_up: bool) {
     let (summary, body, icon, urgency) = if is_up {
         (
-            "Cosmic Pinger",
-            format!("{} voltou a responder.", host),
-            "dialog-information",
+            APP_NAME,
+            format!("✅ {} voltou a responder.", host),
+            "network-transmit-receive",
             Urgency::Normal,
         )
     } else {
         (
-            "Cosmic Pinger",
-            format!("{} ficou OFFLINE.", host),
-            "dialog-warning",
+            APP_NAME,
+            format!("❌ {} ficou OFFLINE!", host),
+            "network-error",
             Urgency::Critical,
         )
     };
 
-    let _ = Notification::new()
+    if let Err(e) = Notification::new()
         .summary(summary)
         .body(&body)
         .icon(icon)
         .urgency(urgency)
-        .show();
+        .timeout(NOTIFICATION_TIMEOUT_MS)
+        .show()
+    {
+        eprintln!("Erro ao enviar notificação: {}", e);
+    }
 }
 
 struct PingerTray { state: Arc<Mutex<PingerState>> }
 
 impl Tray for PingerTray {
+    fn id(&self) -> String {
+        "cosmic-pinger".to_string()
+    }
+
+    fn title(&self) -> String {
+        APP_NAME.to_string()
+    }
+
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
         let s = self.state.lock().unwrap();
         
@@ -365,13 +391,17 @@ impl Tray for PingerTray {
 
     fn tool_tip(&self) -> ToolTip {
         let s = self.state.lock().unwrap();
-        let status_txt = if s.first_run { "Iniciando..." } 
-                         else if s.all_up { "Online" } 
-                         else { "OFFLINE DETECTADO" };
+        let status_txt = if s.first_run { 
+            "Iniciando...".to_string()
+        } else if s.all_up { 
+            format!("Online - {} sites monitorados", s.results.len())
+        } else { 
+            "⚠️ OFFLINE DETECTADO".to_string()
+        };
         
         ToolTip {
-            title: "Cosmic Pinger".to_string(),
-            description: status_txt.to_string(),
+            title: format!("{} v{}", APP_NAME, APP_VERSION),
+            description: status_txt,
             ..Default::default()
         }
     }
