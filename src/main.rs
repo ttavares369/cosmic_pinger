@@ -207,7 +207,15 @@ fn run_tray() {
                         .iter()
                         .find(|(prev_host, _, _)| prev_host == &host)
                         .map(|(_, prev_up, _)| *prev_up);
-                    if previous.map(|p| p != effective_success).unwrap_or(true) {
+                    
+                    // Notifica se houve mudança de estado
+                    let state_changed = previous.map(|p| p != effective_success).unwrap_or(false);
+                    if state_changed {
+                        println!("[NOTIF] Estado mudou para {}: {} -> {}", 
+                            host, 
+                            previous.map(|p| if p {"UP"} else {"DOWN"}).unwrap_or("?"),
+                            if effective_success {"UP"} else {"DOWN"}
+                        );
                         notifications.push((host.clone(), effective_success));
                     }
                 }
@@ -335,6 +343,8 @@ fn summarize_http_status(status: StatusCode) -> (bool, String) {
 }
 
 fn send_status_notification(host: &str, is_up: bool) {
+    println!("[NOTIF] Enviando notificação: {} está {}", host, if is_up {"ONLINE"} else {"OFFLINE"});
+    
     let (summary, body, icon, urgency) = if is_up {
         (
             APP_NAME,
@@ -360,6 +370,8 @@ fn send_status_notification(host: &str, is_up: bool) {
         .show()
     {
         eprintln!("Erro ao enviar notificação: {}", e);
+    } else {
+        println!("[NOTIF] Notificação enviada com sucesso!");
     }
 }
 
